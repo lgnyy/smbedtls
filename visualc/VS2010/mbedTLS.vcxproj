@@ -215,6 +215,7 @@
   <ItemGroup>
     <ClCompile Include="..\..\library\aes.c" />
     <ClCompile Include="..\..\library\aesni.c" />
+    <ClCompile Include="..\..\library\arc2.c" />
     <ClCompile Include="..\..\library\arc4.c" />
     <ClCompile Include="..\..\library\asn1parse.c" />
     <ClCompile Include="..\..\library\asn1write.c" />
@@ -254,6 +255,7 @@
     <ClCompile Include="..\..\library\pk_wrap.c" />
     <ClCompile Include="..\..\library\pkcs11.c" />
     <ClCompile Include="..\..\library\pkcs12.c" />
+    <ClCompile Include="..\..\library\pkcs12_parse.c" />
     <ClCompile Include="..\..\library\pkcs5.c" />
     <ClCompile Include="..\..\library\pkparse.c" />
     <ClCompile Include="..\..\library\pkwrite.c" />
@@ -263,6 +265,9 @@
     <ClCompile Include="..\..\library\sha1.c" />
     <ClCompile Include="..\..\library\sha256.c" />
     <ClCompile Include="..\..\library\sha512.c" />
+    <ClCompile Include="..\..\library\sm2.c" />
+    <ClCompile Include="..\..\library\sm3.c" />
+    <ClCompile Include="..\..\library\sm4.c" />
     <ClCompile Include="..\..\library\ssl_cache.c" />
     <ClCompile Include="..\..\library\ssl_ciphersuites.c" />
     <ClCompile Include="..\..\library\ssl_cli.c" />

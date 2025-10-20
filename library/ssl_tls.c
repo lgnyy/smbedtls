@@ -455,13 +455,32 @@ static int tls_prf_sha384( const unsigned char *secret, size_t slen,
 
 #if defined(MBEDTLS_GM_PROTO_SSL1_1)
 #if defined(MBEDTLS_SM3_C)
+#if defined(MBEDTLS_GM_PROTO_SSL1_1_LOG_ENABLE)
+static void print_hex(const char* tip, const unsigned char* data, int datal)
+{
+    int i;
+    printf("[%s][%d(0x%x)]:", tip, datal, datal);
+    for (i = 0; i < datal; i++)
+    {
+        printf("%02X", data[i]);
+    }
+    printf("\n");
+}
+#endif
 static int gmssl_prf_sm3( const unsigned char *secret, size_t slen,
                            const char *label,
                            const unsigned char *random, size_t rlen,
                            unsigned char *dstbuf, size_t dlen )
 {
-    return( tls_prf_generic( MBEDTLS_MD_SM3, secret, slen,
+    int rv = ( tls_prf_generic( MBEDTLS_MD_SM3, secret, slen,
                              label, random, rlen, dstbuf, dlen ) );
+#if defined(MBEDTLS_GM_PROTO_SSL1_1_LOG_ENABLE)
+    print_hex(__FUNCTION__ " :sec", secret, slen);
+    print_hex(__FUNCTION__ " :label", (const unsigned char*)label, strlen(label));
+    print_hex(__FUNCTION__ " :random", random, rlen);
+    print_hex(__FUNCTION__ " :out", dstbuf, dlen);
+#endif
+    return rv;
 }
 #endif
 #endif /* MBEDTLS_GM_PROTO_SSL1_1 */
@@ -4650,6 +4669,21 @@ int mbedtls_ssl_parse_certificate( mbedtls_ssl_context *ssl )
         }
 #endif /* MBEDTLS_ECP_C */
 
+#ifdef MBEDTLS_GM_PROTO_SSL1_1_PATCH
+		if (ssl->session_negotiate->peer_cert->next != NULL)
+		{
+        	if( mbedtls_ssl_check_cert_usage( ssl->session_negotiate->peer_cert->next,
+                                 ciphersuite_info,
+                                 ! ssl->conf->endpoint,
+                                 &ssl->session_negotiate->verify_result ) != 0 )
+	        {
+	            MBEDTLS_SSL_DEBUG_MSG( 1, ( "bad certificate (usage extensions)" ) );
+	            if( ret == 0 )
+	                ret = MBEDTLS_ERR_SSL_BAD_HS_CERTIFICATE;
+	        }
+    	}
+    	else
+#endif
         if( mbedtls_ssl_check_cert_usage( ssl->session_negotiate->peer_cert,
                                  ciphersuite_info,
                                  ! ssl->conf->endpoint,

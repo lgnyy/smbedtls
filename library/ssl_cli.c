@@ -1973,6 +1973,21 @@ static int ssl_write_encrypted_pms( mbedtls_ssl_context *ssl,
         return( MBEDTLS_ERR_SSL_PK_TYPE_MISMATCH );
     }
 
+#ifdef MBEDTLS_GM_PROTO_SSL1_1_PATCH
+	if (ssl->session_negotiate->peer_cert->next != NULL) 
+	{
+	    if( ( ret = mbedtls_pk_encrypt( &ssl->session_negotiate->peer_cert->next->pk,
+                            p, ssl->handshake->pmslen,
+                            ssl->out_msg + offset + len_bytes, olen,
+                            MBEDTLS_SSL_MAX_CONTENT_LEN - offset - len_bytes,
+                            ssl->conf->f_rng, ssl->conf->p_rng ) ) != 0 )
+	    {
+    	    MBEDTLS_SSL_DEBUG_RET( 1, "mbedtls_rsa_pkcs1_encrypt", ret );
+        	return( ret );
+    	}
+	}
+	else
+#endif
     if( ( ret = mbedtls_pk_encrypt( &ssl->session_negotiate->peer_cert->pk,
                             p, ssl->handshake->pmslen,
                             ssl->out_msg + offset + len_bytes, olen,
@@ -2119,6 +2134,12 @@ static int ssl_parse_server_key_exchange( mbedtls_ssl_context *ssl )
     {
         MBEDTLS_SSL_DEBUG_MSG( 2, ( "<= skip parse server key exchange" ) );
         ssl->state++;
+#ifdef MBEDTLS_GM_PROTO_SSL1_1_PATCH
+        if ((ret = mbedtls_ssl_read_record(ssl)) != 0)
+        {
+            MBEDTLS_SSL_DEBUG_RET(1, "mbedtls_ssl_read_record", ret);
+        }
+#endif
         return( 0 );
     }
     ((void) p);
@@ -2456,6 +2477,9 @@ static int ssl_parse_certificate_request( mbedtls_ssl_context *ssl )
 
     MBEDTLS_SSL_DEBUG_MSG( 2, ( "=> parse certificate request" ) );
 
+#ifdef MBEDTLS_GM_PROTO_SSL1_1_PATCH
+    if(ciphersuite_info->key_exchange != MBEDTLS_KEY_EXCHANGE_SM2)
+#endif
     if( ! mbedtls_ssl_ciphersuite_cert_req_allowed( ciphersuite_info ) )
     {
         MBEDTLS_SSL_DEBUG_MSG( 2, ( "<= skip parse certificate request" ) );
@@ -2542,12 +2566,21 @@ static int ssl_parse_certificate_request( mbedtls_ssl_context *ssl )
         else
 #endif
 #if defined(MBEDTLS_ECDSA_C)
+#ifdef MBEDTLS_GM_PROTO_SSL1_1_PATCH
+        if( *p == MBEDTLS_SSL_CERT_TYPE_ECDSA_SIGN &&
+            mbedtls_pk_can_do(mbedtls_ssl_own_key(ssl), MBEDTLS_PK_SM2) )
+        {
+            ssl->handshake->cert_type = MBEDTLS_PK_SM2;
+            break;
+        }
+#else
         if( *p == MBEDTLS_SSL_CERT_TYPE_ECDSA_SIGN &&
             mbedtls_pk_can_do( mbedtls_ssl_own_key( ssl ), MBEDTLS_PK_ECDSA ) )
         {
             ssl->handshake->cert_type = MBEDTLS_SSL_CERT_TYPE_ECDSA_SIGN;
             break;
         }
+#endif
         else
 #endif
 #if defined(MBEDTLS_SM2_C)
@@ -2567,7 +2600,7 @@ static int ssl_parse_certificate_request( mbedtls_ssl_context *ssl )
         p++;
     }
 
-#if defined(MBEDTLS_SSL_PROTO_TLS1_2) || defined(MBEDTLS_GM_PROTO_SSL1_1)
+#if !defined(MBEDTLS_GM_PROTO_SSL1_1_PATCH) && (defined(MBEDTLS_SSL_PROTO_TLS1_2) || defined(MBEDTLS_GM_PROTO_SSL1_1))
     if( MBEDTLS_SSL_PROTO_IS_TLS1_2 || MBEDTLS_GM_PROTO_IS_SSL1_1 )
     {
         /* Ignored, see comments about hash in write_certificate_verify */
@@ -3052,7 +3085,9 @@ static int ssl_write_certificate_verify( mbedtls_ssl_context *ssl )
 
         /* Info from md_alg will be used instead */
         hashlen = 0;
+#ifndef MBEDTLS_GM_PROTO_SSL1_1_PATCH
         offset = 2;
+#endif
     }
     else
 #endif /* MBEDTLS_SSL_PROTO_TLS1_2 || MBEDTLS_GM_PROTO_SSL1_1 */

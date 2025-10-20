@@ -407,6 +407,19 @@ static int sm2_can_do( mbedtls_pk_type_t type )
     return( type == MBEDTLS_PK_SM2 );
 }
 
+#if defined(MBEDTLS_GM_PROTO_SSL1_1_LOG_ENABLE)
+static void print_hex(const char* tip, const unsigned char* data, int datal)
+{
+    int i;
+    printf("[%s][%d(0x%x)]:", tip, datal, datal);
+    for (i = 0; i < datal; i++)
+    {
+        printf("%02X", data[i]);
+    }
+    printf("\n");
+}
+#endif
+
 static int sm2_verify_wrap( void *ctx, mbedtls_md_type_t md_alg,
                        const unsigned char *hash, size_t hash_len,
                        const unsigned char *sig, size_t sig_len )
@@ -428,11 +441,50 @@ static int sm2_sign_wrap( void *ctx, mbedtls_md_type_t md_alg,
     if( hash_len != mbedtls_md_get_size( mbedtls_md_info_from_type( md_alg ) )
             || sig_len == NULL )
         return( MBEDTLS_ERR_SM2_BAD_INPUT_DATA );
+#ifdef MBEDTLS_GM_PROTO_SSL1_1_PATCH
+    unsigned char z_buf[32], e_buf[32];
+    if ((ret = mbedtls_sm2_hash_z((mbedtls_sm2_context*)ctx, md_alg, NULL, 0, z_buf)) != 0)
+        return(ret);
+    mbedtls_sm2_hash_e(md_alg, z_buf, hash, hash_len, e_buf);
+#if defined(MBEDTLS_GM_PROTO_SSL1_1_LOG_ENABLE)
+    print_hex(__FUNCTION__ " :mddata", hash, hash_len);
+#endif
+    hash = e_buf;
+#endif
     ret = mbedtls_sm2_sign( (mbedtls_sm2_context *) ctx, md_alg, hash, sig,
             f_rng, p_rng );
     if( ret == 0 )
         *sig_len = ( ((mbedtls_sm2_context *) ctx)->grp.nbits + 7 ) / 8 * 2;
+#ifdef MBEDTLS_GM_PROTO_SSL1_1_PATCH
+    if ((ret == 0) && (*sig_len == 64)){
+        unsigned char rs[64];
+        int offset = 0, zoff;
+        memcpy(rs, sig, 64);
+        sig[offset++] = 0x30;
+        sig[offset++] = 0x00;
+        for (zoff = 0; (zoff < 0x20) && (rs[zoff] == 0); zoff++);
+        sig[offset++] = 0x02;
+        sig[offset++] = 0x20 - zoff;
+        if (rs[zoff] & 0x80) {
+            sig[offset - 1] ++;
+            sig[offset++] = 0x00;
+        }
+        memcpy(sig + offset, rs + zoff, 0x20 - zoff);
+        offset += (0x20 - zoff);
 
+        for (zoff = 0; (zoff < 0x20) && (rs[0x20+zoff] == 0); zoff++);
+        sig[offset++] = 0x02;
+        sig[offset++] = 0x20 - zoff;
+        if (rs[0x20 + zoff] & 0x80) {
+            sig[offset - 1] ++;
+            sig[offset++] = 0x00;
+        }
+        memcpy(sig + offset, rs + 0x20 + zoff, 0x20 - zoff);
+        offset += (0x20 - zoff);
+        sig[1] = (unsigned char)(offset - 2);
+        *sig_len = offset;
+    }
+#endif
     return( ret );
 }
 
@@ -466,8 +518,62 @@ static int sm2_encrypt_wrap( void *ctx,
 
     if( osize < (ilen + addlen) )
         return( MBEDTLS_ERR_RSA_BAD_INPUT_DATA );
-    return mbedtls_sm2_encrypt( (mbedtls_sm2_context *) ctx, md_type,
+    int rv = mbedtls_sm2_encrypt( (mbedtls_sm2_context *) ctx, md_type,
             input, ilen, output, olen, f_rng, p_rng );
+#ifdef MBEDTLS_GM_PROTO_SSL1_1_PATCH
+    if (rv == 0)
+    {   // C1C2C3 --> DER
+        unsigned char output_tmp[0x100];
+        size_t olen_tmp = *olen;
+        size_t offset = 0, zoff;
+        memcpy(output_tmp, output, olen_tmp);
+
+        output[offset++] = 0x30;
+        output[offset++] = 0x81;
+        output[offset++] = 0x00;
+        for (zoff = 0; (zoff < 0x20) && (output_tmp[0x01 + zoff] == 0); zoff++);
+        output[offset++] = 0x02;
+        output[offset++] = (unsigned char)(0x20 - zoff);
+        if (output_tmp[0x01 + zoff] & 0x80) {
+            output[offset - 1] ++;
+            output[offset++] = 0x00;
+        }
+        memcpy(output + offset, output_tmp + 0x01 + zoff, 0x20 - zoff);
+        offset += (0x20 - zoff);
+
+        for (zoff = 0; (zoff < 0x20) && (output_tmp[0x01 + zoff] == 0); zoff++);
+        output[offset++] = 0x02;
+        output[offset++] = (unsigned char)(0x20 - zoff);
+        if (output_tmp[0x21 + zoff] & 0x80) {
+            output[offset - 1] ++;
+            output[offset++] = 0x00;
+        }
+        memcpy(output + offset, output_tmp + 0x21 + zoff, 0x20 - zoff);
+        offset += (0x20 - zoff);
+
+        output[offset++] = 0x04;
+        output[offset++] = 0x20;
+        memcpy(output + offset, output_tmp + olen_tmp - 0x20, 0x20);
+        offset += 0x20;
+
+        output[offset++] = 0x04;
+        output[offset++] = (unsigned char)(olen_tmp - 0x61);
+        memcpy(output + offset, output_tmp + 0x41, olen_tmp - 0x61);
+        offset += (olen_tmp - 0x61);
+        output[2] = (unsigned char)(offset - 3);
+
+        *olen = offset;
+    }
+#if defined(MBEDTLS_GM_PROTO_SSL1_1_LOG_ENABLE)
+    unsigned char P_buf[0x41];
+    size_t P_size = 0;
+    mbedtls_ecp_point_write_binary(&((mbedtls_sm2_context*)ctx)->grp, &((mbedtls_sm2_context*)ctx)->Q, MBEDTLS_ECP_PF_UNCOMPRESSED, &P_size, P_buf, 0x41);
+    print_hex(__FUNCTION__ " :P", P_buf, P_size);
+    print_hex(__FUNCTION__ " :input/pms", input, ilen);
+    print_hex(__FUNCTION__ " :output/encbytes1", output, *olen);
+#endif
+#endif
+    return rv;
 }
 
 static void *sm2_alloc_wrap( void )

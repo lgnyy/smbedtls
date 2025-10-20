@@ -2598,6 +2598,7 @@
  * Comment this macro to disable support for GM-TLS 1.1/GM-DTLS 1.1
  */
 #define MBEDTLS_GM_PROTO_SSL1_1
+#define MBEDTLS_GM_PROTO_SSL1_1_PATCH
 
 /**
  * \def MBEDTLS_KEY_EXCHANGE_SM2_ENABLED
