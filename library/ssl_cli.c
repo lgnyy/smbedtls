@@ -2135,9 +2135,66 @@ static int ssl_parse_server_key_exchange( mbedtls_ssl_context *ssl )
         MBEDTLS_SSL_DEBUG_MSG( 2, ( "<= skip parse server key exchange" ) );
         ssl->state++;
 #ifdef MBEDTLS_GM_PROTO_SSL1_1_PATCH
-        if ((ret = mbedtls_ssl_read_record(ssl)) != 0)
-        {
-            MBEDTLS_SSL_DEBUG_RET(1, "mbedtls_ssl_read_record", ret);
+        if (ciphersuite_info->key_exchange == MBEDTLS_KEY_EXCHANGE_SM2) {
+            size_t sig_len, hashlen, certlen;
+            unsigned char hash[64];
+            mbedtls_md_type_t md_alg = MBEDTLS_MD_SM3;
+            mbedtls_pk_type_t pk_alg = MBEDTLS_PK_SM2;
+
+            if ((ret = mbedtls_ssl_read_record(ssl)) != 0)
+            {
+                MBEDTLS_SSL_DEBUG_RET(1, "mbedtls_ssl_read_record", ret);
+            }
+
+            p = ssl->in_msg + mbedtls_ssl_hs_hdr_len(ssl);
+            sig_len = (p[0] << 8) | p[1];
+            p += 2;
+
+            if ((ssl->session_negotiate->peer_cert == NULL) || (ssl->session_negotiate->peer_cert->next == NULL))
+            {
+                MBEDTLS_SSL_DEBUG_MSG(2, ("certificate required"));
+                return(MBEDTLS_ERR_SSL_UNEXPECTED_MESSAGE);
+            }
+
+            mbedtls_md_context_t ctx;
+            mbedtls_md_init(&ctx);
+            if ((ret = mbedtls_md_setup(&ctx,
+                mbedtls_md_info_from_type(md_alg), 0)) != 0)
+            {
+                MBEDTLS_SSL_DEBUG_RET(1, "mbedtls_md_setup", ret);
+                return(ret);
+            }
+
+            if ((ret = mbedtls_sm2_hash_z(ssl->session_negotiate->peer_cert->pk.pk_ctx, md_alg,
+                NULL, 0, hash)) != 0)
+                return(ret);
+
+            certlen = ssl->session_negotiate->peer_cert->next->raw.len;
+            mbedtls_md_starts(&ctx);
+            mbedtls_md_update(&ctx, hash, 32);
+            mbedtls_md_update(&ctx, ssl->handshake->randbytes, 64);
+            hash[0] = 0x00; hash[1] = (certlen >> 8)&0xFF; hash[2] = certlen & 0xFF;
+            mbedtls_md_update(&ctx, hash, 3); // certlen
+            mbedtls_md_update(&ctx, ssl->session_negotiate->peer_cert->next->raw.p, certlen);
+            mbedtls_md_finish(&ctx, hash);
+            mbedtls_md_free(&ctx);
+            hashlen = 32;
+
+            /*
+             * Verify signature
+             */
+            if (!mbedtls_pk_can_do(&ssl->session_negotiate->peer_cert->pk, pk_alg))
+            {
+                MBEDTLS_SSL_DEBUG_MSG(1, ("bad server key exchange message"));
+                return(MBEDTLS_ERR_SSL_PK_TYPE_MISMATCH);
+            }
+
+            if ((ret = mbedtls_pk_verify(&ssl->session_negotiate->peer_cert->pk,
+                md_alg, hash, hashlen, p, sig_len)) != 0)
+            {
+                MBEDTLS_SSL_DEBUG_RET(1, "mbedtls_pk_verify", ret);
+                return(ret);
+            }
         }
 #endif
         return( 0 );

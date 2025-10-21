@@ -913,7 +913,7 @@ static int x509_crt_parse_der_core( mbedtls_x509_crt *crt, const unsigned char *
         return( MBEDTLS_ERR_X509_SIG_MISMATCH );
     }
 
-#if defined(MBEDTLS_SM2_C)
+#if defined(MBEDTLS_SM2_C) && !defined(MBEDTLS_GM_PROTO_SSL1_1_PATCH)
     if( crt->sig_pk == MBEDTLS_PK_SM2 )
     {
         if( ( ret = mbedtls_x509_get_sm2_sig( &p, end +

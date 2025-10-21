@@ -30,6 +30,10 @@
 
 /* Even if RSA not activated, for the sake of RSA-alt */
 #include "mbedtls/rsa.h"
+#ifdef MBEDTLS_GM_PROTO_SSL1_1_PATCH
+#include "mbedtls/asn1.h"
+#include "mbedtls/asn1write.h"
+#endif
 
 #include <string.h>
 
@@ -428,6 +432,74 @@ static int sm2_verify_wrap( void *ctx, mbedtls_md_type_t md_alg,
             || sig_len <= 0 )
         return( MBEDTLS_ERR_ECP_VERIFY_FAILED );
 
+#ifdef MBEDTLS_GM_PROTO_SSL1_1_PATCH
+    unsigned char rs[64+16];
+    if ((sig[0] == 0x30) && (sig[1] == sig_len - 2) && (sig[2] == 0x02)) {
+#if 0
+        unsigned char rlen = sig[3];
+        unsigned char slen = sig[4+rlen+1];
+        memset(rs, 0, 64);
+        if (rlen > 32) {
+            memcpy(rs, sig + 5, 32);
+        }
+        else {
+            memcpy(rs + 32-rlen, sig + 4, rlen);
+        }
+        if (slen > 32) {
+            memcpy(rs + 32, sig + 4 + rlen + 3, 32);
+        }
+        else {
+            memcpy(rs - slen, sig + 4 + rlen + 2, slen);
+        }
+#else
+        int ret;
+        size_t len;// , r_len, s_len;
+        mbedtls_mpi r, s;
+        unsigned char* p = (unsigned char*)sig;
+        const unsigned char* end2 = sig + sig_len;
+
+        if ((ret = mbedtls_asn1_get_tag(&p, end2, &len,
+            MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SEQUENCE)) != 0)
+        {
+            return(MBEDTLS_ERR_SM2_BAD_INPUT_DATA + ret);
+        }
+        end2 = p + len;
+
+        mbedtls_mpi_init(&r);
+        mbedtls_mpi_init(&s);
+        do {
+            if ((ret = mbedtls_asn1_get_mpi(&p, end2, &r)))
+            {
+                ret += MBEDTLS_ERR_SM2_BAD_INPUT_DATA;
+                break;
+            }
+            if ((ret = mbedtls_asn1_get_mpi(&p, end2, &s)))
+            {
+                ret += MBEDTLS_ERR_SM2_BAD_INPUT_DATA;
+                break;
+            }
+
+            //r_len = mbedtls_mpi_size(&r);
+            if ((ret = mbedtls_mpi_write_binary(&r, rs, 0x20)))
+            {
+                ret += MBEDTLS_ERR_SM2_BAD_INPUT_DATA;
+                break;
+            }
+
+            //s_len = mbedtls_mpi_size(&s);
+            if ((ret = mbedtls_mpi_write_binary(&s, rs + 0x20, 0x20)))
+            {
+                ret += MBEDTLS_ERR_SM2_BAD_INPUT_DATA;
+                break;
+            }
+        } while (0);
+        mbedtls_mpi_free(&r);
+        mbedtls_mpi_free(&s);
+#endif
+        sig = rs;
+    }
+
+#endif
     return mbedtls_sm2_verify( (mbedtls_sm2_context *) ctx, md_alg, hash, sig );
 }
 
@@ -457,6 +529,7 @@ static int sm2_sign_wrap( void *ctx, mbedtls_md_type_t md_alg,
         *sig_len = ( ((mbedtls_sm2_context *) ctx)->grp.nbits + 7 ) / 8 * 2;
 #ifdef MBEDTLS_GM_PROTO_SSL1_1_PATCH
     if ((ret == 0) && (*sig_len == 64)){
+#if 0
         unsigned char rs[64];
         int offset = 0, zoff;
         memcpy(rs, sig, 64);
@@ -483,6 +556,31 @@ static int sm2_sign_wrap( void *ctx, mbedtls_md_type_t md_alg,
         offset += (0x20 - zoff);
         sig[1] = (unsigned char)(offset - 2);
         *sig_len = offset;
+#else
+        mbedtls_mpi r, s;
+        int ret,ret2;
+        unsigned char buf[16+64];
+        unsigned char* p = buf + sizeof(buf);
+        size_t len = 0;
+
+        mbedtls_mpi_init(&r);
+        mbedtls_mpi_init(&s);
+        mbedtls_mpi_read_binary(&r, sig, 0x20);
+        mbedtls_mpi_read_binary(&s, sig + 0x20, 0x20);
+        ret  = mbedtls_asn1_write_mpi(&p, buf, &s);
+        ret2 = mbedtls_asn1_write_mpi(&p, buf, &r);
+        mbedtls_mpi_free(&r);
+        mbedtls_mpi_free(&s);
+        MBEDTLS_ASN1_CHK_ADD(len, ret);
+        MBEDTLS_ASN1_CHK_ADD(len, ret2);
+
+        MBEDTLS_ASN1_CHK_ADD(len, mbedtls_asn1_write_len(&p, buf, len));
+        MBEDTLS_ASN1_CHK_ADD(len, mbedtls_asn1_write_tag(&p, buf,
+            MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SEQUENCE));
+
+        memcpy(sig, p, len);
+        *sig_len = len;
+#endif
     }
 #endif
     return( ret );
@@ -502,6 +600,9 @@ static int sm2_decrypt_wrap( void *ctx,
 
     if( ilen < addlen || osize < (ilen - addlen) )
         return( MBEDTLS_ERR_RSA_BAD_INPUT_DATA );
+#ifdef MBEDTLS_GM_PROTO_SSL1_1_PATCH
+    // TODO: DER -> C1C2C3
+#endif
     return mbedtls_sm2_decrypt( (mbedtls_sm2_context *) ctx, md_type,
             input, ilen, output, olen );
 }
@@ -525,6 +626,7 @@ static int sm2_encrypt_wrap( void *ctx,
     {   // C1C2C3 --> DER
         unsigned char output_tmp[0x100];
         size_t olen_tmp = *olen;
+#if 0
         size_t offset = 0, zoff;
         memcpy(output_tmp, output, olen_tmp);
 
@@ -563,6 +665,33 @@ static int sm2_encrypt_wrap( void *ctx,
         output[2] = (unsigned char)(offset - 3);
 
         *olen = offset;
+#else
+        mbedtls_mpi x, y;
+        int ret, ret2;
+        unsigned char* p = output_tmp + sizeof(output_tmp);
+        size_t len = 0;
+
+        MBEDTLS_ASN1_CHK_ADD(len, mbedtls_asn1_write_octet_string(&p, output_tmp, output + 0x41, olen_tmp - 0x61));
+        MBEDTLS_ASN1_CHK_ADD(len, mbedtls_asn1_write_octet_string(&p, output_tmp, output + olen_tmp - 0x20, 0x20));
+
+        mbedtls_mpi_init(&x);
+        mbedtls_mpi_init(&y);
+        mbedtls_mpi_read_binary(&x, output + 0x01, 0x20);
+        mbedtls_mpi_read_binary(&y, output + 0x21, 0x20);
+        ret  = mbedtls_asn1_write_mpi(&p, output_tmp, &y);
+        ret2 = mbedtls_asn1_write_mpi(&p, output_tmp, &x);
+        mbedtls_mpi_free(&x);
+        mbedtls_mpi_free(&y);
+        MBEDTLS_ASN1_CHK_ADD(len, ret);
+        MBEDTLS_ASN1_CHK_ADD(len, ret2);
+
+        MBEDTLS_ASN1_CHK_ADD(len, mbedtls_asn1_write_len(&p, output_tmp, len));
+        MBEDTLS_ASN1_CHK_ADD(len, mbedtls_asn1_write_tag(&p, output_tmp,
+            MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SEQUENCE));
+
+        memcpy(output, p, len);
+        *olen = len;
+#endif
     }
 #if defined(MBEDTLS_GM_PROTO_SSL1_1_LOG_ENABLE)
     unsigned char P_buf[0x41];
